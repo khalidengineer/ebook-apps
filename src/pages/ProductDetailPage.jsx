@@ -9,12 +9,56 @@
 //  - Disable text selection in preview area
 // These are deterrents only — determined users on some platforms can still capture screens.
 
+// PDF VIEWER STRATEGY (Chrome-compatible):
+// Chrome blocks direct PDF iframes from many origins due to X-Frame-Options / CSP.
+// Solution: Use Google Docs Viewer (viewer.google.com) which wraps any public PDF URL
+// and renders it as HTML — no Chrome blocking. Falls back to PDF.js CDN viewer.
+
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApp } from '../config/AppContext';
 import { addRecentlyViewed, savePdf, isSaved, removeSavedPdf } from '../storage/db';
 import { useToast } from '../components/ToastProvider';
 import './ProductDetailPage.css';
+
+// ─── PDF URL helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Convert any Google Drive share/view URL to a direct download URL.
+ * e.g. https://drive.google.com/file/d/FILE_ID/view  →  direct export url
+ */
+function toDirectPdfUrl(url) {
+  if (!url) return url;
+  // Already a direct uc?export link
+  if (url.includes('drive.google.com/uc')) return url;
+  // drive.google.com/file/d/ID/view  or  /open?id=ID
+  const fileMatch = url.match(/drive\.google\.com\/file\/d\/([^/?\s]+)/);
+  if (fileMatch) {
+    return `https://drive.google.com/uc?export=view&id=${fileMatch[1]}`;
+  }
+  const openMatch = url.match(/[?&]id=([^&\s]+)/);
+  if (url.includes('drive.google.com') && openMatch) {
+    return `https://drive.google.com/uc?export=view&id=${openMatch[1]}`;
+  }
+  return url;
+}
+
+/**
+ * Build Google Docs Viewer URL for any publicly accessible PDF.
+ * This bypasses Chrome's iframe PDF block because Google renders it as HTML.
+ */
+function toGoogleDocsViewerUrl(rawUrl) {
+  const direct = toDirectPdfUrl(rawUrl);
+  return `https://docs.google.com/viewer?url=${encodeURIComponent(direct)}&embedded=true`;
+}
+
+/**
+ * Build PDF.js CDN viewer URL as a fallback.
+ */
+function toPdfJsViewerUrl(rawUrl) {
+  const direct = toDirectPdfUrl(rawUrl);
+  return `https://mozilla.github.io/pdf.js/web/viewer.html?file=${encodeURIComponent(direct)}`;
+}
 
 function StarRating({ rating }) {
   return (
@@ -38,6 +82,9 @@ export default function ProductDetailPage() {
   const [pdfBlurred, setPdfBlurred] = useState(false);
   const [saved, setSaved] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // viewer: 'google' | 'pdfjs' | 'direct'
+  const [viewerMode, setViewerMode] = useState('google');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const previewRef = useRef(null);
 
   const product = state.products.find((p) => p.id === id);
@@ -187,7 +234,12 @@ export default function ProductDetailPage() {
             {product.pdfLink && (
               <button
                 className="btn btn-primary detail-btn"
-                onClick={() => { setShowPreview(true); setPdfLoading(true); }}
+                onClick={() => {
+                  setViewerMode('google');
+                  setLoadAttempt(0);
+                  setPdfLoading(true);
+                  setShowPreview(true);
+                }}
               >
                 👁 Preview PDF
               </button>
@@ -238,7 +290,22 @@ export default function ProductDetailPage() {
             {/* Header */}
             <div className="pdf-modal-header">
               <span className="pdf-modal-title">{product.name}</span>
-              <button className="btn btn-icon" onClick={() => setShowPreview(false)}>✕</button>
+              <div className="pdf-modal-header-actions">
+                {/* Viewer mode switcher */}
+                <div className="pdf-viewer-toggle">
+                  {['google', 'pdfjs', 'direct'].map((mode) => (
+                    <button
+                      key={mode}
+                      className={`pdf-toggle-btn ${viewerMode === mode ? 'active' : ''}`}
+                      onClick={() => { setViewerMode(mode); setPdfLoading(true); setLoadAttempt(a => a + 1); }}
+                      title={mode === 'google' ? 'Google Viewer' : mode === 'pdfjs' ? 'PDF.js Viewer' : 'Direct'}
+                    >
+                      {mode === 'google' ? 'G' : mode === 'pdfjs' ? 'P' : 'D'}
+                    </button>
+                  ))}
+                </div>
+                <button className="btn btn-icon" onClick={() => setShowPreview(false)}>✕</button>
+              </div>
             </div>
 
             {/* Viewer */}
@@ -265,25 +332,75 @@ export default function ProductDetailPage() {
                 <div className="pdf-loading">
                   <div className="pdf-spinner" />
                   <p>Loading preview…</p>
+                  <span className="pdf-loading-hint">
+                    {viewerMode === 'google' ? 'Using Google Docs Viewer' : viewerMode === 'pdfjs' ? 'Using PDF.js Viewer' : 'Direct embed'}
+                  </span>
                 </div>
               )}
 
-              <iframe
-                src={`${product.pdfLink}#toolbar=0&navpanes=0&scrollbar=0`}
-                title="PDF Preview"
-                className="pdf-frame"
+              {/* Smart iframe — switches between Google Docs Viewer, PDF.js, and direct */}
+              <PdfFrame
+                key={`${viewerMode}-${loadAttempt}`}
+                pdfLink={product.pdfLink}
+                viewerMode={viewerMode}
                 onLoad={() => setPdfLoading(false)}
-                onError={() => { setPdfLoading(false); showToast('Could not load PDF preview', 'error'); }}
-                sandbox="allow-same-origin allow-scripts"
+                onError={() => {
+                  setPdfLoading(false);
+                  // Auto-fallback chain: google → pdfjs → direct
+                  if (viewerMode === 'google') {
+                    showToast('Switching to PDF.js viewer…');
+                    setViewerMode('pdfjs');
+                    setPdfLoading(true);
+                  } else if (viewerMode === 'pdfjs') {
+                    showToast('Switching to direct viewer…');
+                    setViewerMode('direct');
+                    setPdfLoading(true);
+                  } else {
+                    showToast('Could not load PDF. Check the link is publicly accessible.', 'error');
+                  }
+                }}
               />
             </div>
 
             <p className="pdf-protection-note">
               🔒 This preview is protected. Downloading or sharing is not permitted.
+              {viewerMode !== 'google' && (
+                <button
+                  className="pdf-retry-btn"
+                  onClick={() => { setViewerMode('google'); setPdfLoading(true); setLoadAttempt(a => a + 1); }}
+                >
+                  Try Google Viewer
+                </button>
+              )}
             </p>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+// ─── PdfFrame component ──────────────────────────────────────────────────────
+// Renders correct iframe src based on viewerMode.
+// Google Docs Viewer: works for most public PDFs, bypasses Chrome block.
+// PDF.js CDN: open-source viewer, works for direct URLs.
+// Direct: raw iframe (may be blocked by Chrome for some hosts).
+function PdfFrame({ pdfLink, viewerMode, onLoad, onError }) {
+  const src = viewerMode === 'google'
+    ? toGoogleDocsViewerUrl(pdfLink)
+    : viewerMode === 'pdfjs'
+    ? toPdfJsViewerUrl(pdfLink)
+    : toDirectPdfUrl(pdfLink);
+
+  return (
+    <iframe
+      src={src}
+      title="PDF Preview"
+      className="pdf-frame"
+      onLoad={onLoad}
+      onError={onError}
+      // No sandbox restriction — Google viewer needs full access
+      allow="autoplay"
+    />
   );
 }

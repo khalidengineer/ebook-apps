@@ -11,12 +11,9 @@ import SavedPdfsPage from './pages/SavedPdfsPage';
 import SettingsPage from './pages/SettingsPage';
 import BottomNav from './components/BottomNav';
 import TopBar from './components/TopBar';
-import InstallPrompt from './components/InstallPrompt';
 import UpdatePopup from './components/UpdatePopup';
 import ToastProvider from './components/ToastProvider';
-
-// Pages that show the TopBar + BottomNav layout
-const LAYOUT_PAGES = ['/', '/categories', '/recently-viewed', '/saved', '/settings'];
+import ForceInstallGate from './components/ForceInstallGate';
 
 function AppLayout({ children, showNav }) {
   return (
@@ -34,49 +31,51 @@ export default function App() {
   return (
     <AppProvider>
       <ToastProvider>
-        <BrowserRouter>
-          {!splashDone ? (
-            <SplashScreen onDone={() => setSplashDone(true)} />
-          ) : (
-            <>
-              <Routes>
-                <Route path="/" element={
-                  <AppLayout showNav>
-                    <HomePage />
-                  </AppLayout>
-                } />
-                <Route path="/product/:id" element={
-                  <AppLayout showNav={false}>
-                    <ProductDetailPage />
-                  </AppLayout>
-                } />
-                <Route path="/categories" element={
-                  <AppLayout showNav>
-                    <CategoriesPage />
-                  </AppLayout>
-                } />
-                <Route path="/recently-viewed" element={
-                  <AppLayout showNav>
-                    <RecentlyViewedPage />
-                  </AppLayout>
-                } />
-                <Route path="/saved" element={
-                  <AppLayout showNav>
-                    <SavedPdfsPage />
-                  </AppLayout>
-                } />
-                <Route path="/settings" element={
-                  <AppLayout showNav>
-                    <SettingsPage />
-                  </AppLayout>
-                } />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-              <InstallPrompt />
-              <UpdatePopup />
-            </>
-          )}
-        </BrowserRouter>
+        {/* ForceInstallGate: mobile browser pe block karega jab tak PWA install nahi */}
+        <ForceInstallGate>
+          <BrowserRouter>
+            {!splashDone ? (
+              <SplashScreen onDone={() => setSplashDone(true)} />
+            ) : (
+              <>
+                <Routes>
+                  <Route path="/" element={
+                    <AppLayout showNav>
+                      <HomePage />
+                    </AppLayout>
+                  } />
+                  <Route path="/product/:id" element={
+                    <AppLayout showNav={false}>
+                      <ProductDetailPage />
+                    </AppLayout>
+                  } />
+                  <Route path="/categories" element={
+                    <AppLayout showNav>
+                      <CategoriesPage />
+                    </AppLayout>
+                  } />
+                  <Route path="/recently-viewed" element={
+                    <AppLayout showNav>
+                      <RecentlyViewedPage />
+                    </AppLayout>
+                  } />
+                  <Route path="/saved" element={
+                    <AppLayout showNav>
+                      <SavedPdfsPage />
+                    </AppLayout>
+                  } />
+                  <Route path="/settings" element={
+                    <AppLayout showNav>
+                      <SettingsPage />
+                    </AppLayout>
+                  } />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+                <UpdatePopup />
+              </>
+            )}
+          </BrowserRouter>
+        </ForceInstallGate>
       </ToastProvider>
     </AppProvider>
   );
